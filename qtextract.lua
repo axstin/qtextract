@@ -2,7 +2,7 @@
 qtextract.lua
 5/17/2018
 
-tool for extracting qt resources from a Windows x86 binary (.exe/.dll)
+Tool for extracting Qt resources from a x86/x64 Windows binary (.exe/.dll)
 by Austin
 ]]
 
@@ -26,7 +26,7 @@ usage: lua qtextract.lua filename [options]
 ]]
 
 local filename = arg[1]
-local file = assert(io.open(filename, "rb"))
+local file
 
 local function sleep(seconds)
 	local start = os.clock()
@@ -212,6 +212,12 @@ local seek, read, readbytes, readchar, readshort, readint, scan, scanall, file_o
 	end
 end
 
+if checkopt("--help") then
+	print(usage)
+	return
+end
+
+file = assert(io.open(filename, "rb"))
 local pe = assert(peparser.parse(filename))
 local imagebase = peparser.toDec(pe.ImageBase)
 
@@ -487,11 +493,6 @@ local function dumpresourcedata(outputdir, data, names, tree, version)
 	end
 
 	dump(outputdir)
-end
-
-if checkopt("--help") then
-	print(usage)
-	return
 end
 
 local list = checkdataopt() or askresourcedata()
