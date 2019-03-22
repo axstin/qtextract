@@ -221,60 +221,84 @@ file = assert(io.open(filename, "rb"))
 local pe = assert(peparser.parse(filename))
 local imagebase = peparser.toDec(pe.ImageBase)
 
-local archs = {
-	[0x14c] = {
-		signatures = { "68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? E8 ?? ?? ?? ?? 83 C4 10 B8 01 00 00 00 C3",
-		"68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? FF 15 ?? ?? ?? ?? 83 C4 10 B8 01 00 00 00 C3" },
+local archs do
+	-- file offset to RVA
+	local function fo2rva(o)
+		for i, v in next, pe.Sections do
+			local prd = peparser.toDec(v.PointerToRawData)
+			local srd = peparser.toDec(v.SizeOfRawData)
+			local va = peparser.toDec(v.VirtualAddress)
 
-		extract = function(loc)
-			file_offset = loc
-
-			local offsets = {}
-
-			for i = 1, 3 do
-				file_offset = file_offset + 1 -- skip 0x68 (push)
-				offsets[#offsets + 1] = assert(pe:get_fileoffset(readint() - imagebase)) -- readint() = VA, readint() - base = RVA
+			if o >= prd and o < prd + srd then
+				return (o - prd) + va
 			end
-
-			file_offset = file_offset + 1 -- skip 0x6A (push)
-			offsets[4] = readchar() -- read version
-
-			return offsets
 		end
-	},
+	end
 
-	[0x8664] = {
-		signatures = { "48 83 EC 28 4C 8D 0D ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? B9 ?? ?? ?? ?? E8 ?? ?? ?? ?? B8 01 00 00 00 48 83 C4 28 C3" },
+	local function x86extract(loc)
+		file_offset = loc
 
-		extract = function(loc)
-			file_offset = loc + 4
-			local offsets = {}
+		local offsets = {}
 
-			local function FileOffsetToRVA(o)
-				for i, v in next, pe.Sections do
-					local prd = peparser.toDec(v.PointerToRawData)
-					local srd = peparser.toDec(v.SizeOfRawData)
-					local va = peparser.toDec(v.VirtualAddress)
+		for i = 1, 3 do
+			file_offset = file_offset + 1 -- skip 0x68 (push)
+			offsets[#offsets + 1] = assert(pe:get_fileoffset(readint() - imagebase)) -- readint() = VA, readint() - base = RVA
+		end
 
-					if o >= prd and o < prd + srd then
-						return (o - prd) + va
+		file_offset = file_offset + 1 -- skip 0x6A (push)
+		offsets[4] = readchar() -- read version
+
+		return offsets
+	end
+
+	archs = {
+		[0x14c] = {
+			signatures = {
+				{ "68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? E8 ?? ?? ?? ?? 83 C4 10 B8 01 00 00 00 C3", x86extract },
+				{ "68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? FF 15 ?? ?? ?? ?? 83 C4 10 B8 01 00 00 00 C3", x86extract }
+			}
+		},
+
+		[0x8664] = {
+			signatures = { 
+				{ "48 83 EC 28 4C 8D 0D ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? B9 ?? ?? ?? ?? E8 ?? ?? ?? ?? B8 01 00 00 00 48 83 C4 28 C3",
+					function(loc)
+						file_offset = loc + 4
+						local offsets = {}
+
+						for i = 1, 3 do
+							file_offset = file_offset + 3 -- skip lea
+							local rel = readint()
+							offsets[#offsets + 1] = assert(pe:get_fileoffset(fo2rva(file_offset) + rel)) 
+						end
+
+						file_offset = file_offset + 1
+						offsets[4] = readint()
+
+						return offsets
 					end
-				end
-			end
+				},
+				{ "48 83 EC 28 4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? E8",
+					function(loc)
+						file_offset = loc + 4
+						local offsets = {} -- data, name, tree, version
 
-			for i = 1, 3 do
-				file_offset = file_offset + 3 -- skip lea
-				local rel = readint()
-				offsets[#offsets + 1] = assert(pe:get_fileoffset(FileOffsetToRVA(file_offset) + rel)) 
-			end
+						file_offset = file_offset + 3
+						offsets[1] = assert(pe:get_fileoffset(readint() + fo2rva(file_offset)))
+						file_offset = file_offset + 1
+						offsets[4] = readint()
+						file_offset = file_offset + 3
+						offsets[2] = assert(pe:get_fileoffset(readint() + fo2rva(file_offset)))
+						file_offset = file_offset + 3
+						offsets[3] = assert(pe:get_fileoffset(readint() + fo2rva(file_offset)))
 
-			file_offset = file_offset + 1
-			offsets[4] = readint()
-
-			return offsets
-		end
+						return offsets
+					end
+				}
+			}
+		}
 	}
-}
+end
 
 local function checkdataopt()
 	-- For providing resource chunk information that couldn't be found automatically
@@ -322,9 +346,9 @@ local function askresourcedata()
 	assert(arch ~= nil, "unknown architecture")
 
 	for i, v in next, arch.signatures do
-		for j, k in next, scanall(v) do
+		for j, k in next, scanall(v[1]) do
 			-- extract 
-			local offsets = arch.extract(k)
+			local offsets = v[2](k)
 			if not hash[offsets[1]] then 
 				hash[offsets[1]] = true
 				results[#results + 1] = { register = k, offsets = offsets} 
