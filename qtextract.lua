@@ -28,30 +28,6 @@ usage: lua qtextract.lua filename [options]
 local filename = arg[1]
 local file
 
-local function sleep(seconds)
-	local start = os.clock()
-	while os.clock() - start < seconds do end
-end
-
-local function timer()
-	local t = os.clock()
-	return function() return os.clock() - t end
-end
-
-local function inspect(t, indent)
-	assert(type(t) == "table", "table expected")
-	if not indent then indent = 0 end
-
-	for i, v in next, t do
-		if type(v) == "table" then
-			print(("    "):rep(indent) .. tostring(i) .. " = table")
-			inspect(v, indent + 1)
-		else
-			print(("    "):rep(indent) .. tostring(i) .. " = " .. tostring(v) .. " (" .. type(v) .. ")")
-		end
-	end
-end
-
 local function checkopt(opt, num)
 	for i = 1, #arg do
 		if arg[i] == opt then
@@ -380,11 +356,6 @@ local function askresourcedata()
 	else 
 		error("unable to find any resource chunks")
 	end
-end
-
--- returns data, name, tree, and version
-local function extractoffsets(loc)
-
 end
 
 local function dumpresourcedata(outputdir, data, names, tree, version)
