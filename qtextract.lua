@@ -14,7 +14,9 @@ usage: lua qtextract.lua filename [options]
   options:
     --help                   Print this help
     --chunk chunk_id         The chunk to dump. Exclude this to see a list of chunks (if any can be found) and use 1 to dump all chunks
-    --output directory       For specifying an output directory
+	--output directory       For specifying an output directory
+	--scanall                Scan the entire file (instead of the first executable section)
+	--section section        For scanning a specific section
     --data, --datarva info   [Advanced] Use these options to manually provide offsets to a qt resource in the binary
                              (e.g. if no chunks were found automatically by qtextract).
                              'info' should use the following format: %x,%x,%x,%d
@@ -31,11 +33,6 @@ local file
 local function sleep(seconds)
 	local start = os.clock()
 	while os.clock() - start < seconds do end
-end
-
-local function timer()
-	local t = os.clock()
-	return function() return os.clock() - t end
 end
 
 local function inspect(t, indent)
@@ -153,8 +150,9 @@ local seek, read, readbytes, readchar, readshort, readint, scan, scanall, file_o
 		return n
 	end
 
-	function scan(signature, start)
+	function scan(signature, start, limit)
 		if not start then start = 0 end
+		if not limit then limit = math.huge end
 		seek("set", start)
 
 		local sigbytes = {}
@@ -171,7 +169,7 @@ local seek, read, readbytes, readchar, readshort, readint, scan, scanall, file_o
 
 		local size = #sigbytes
 
-		while true do
+		while file_offset <= limit - size do
 			local old_offset = file_offset
 			local data = read(size)
 			local nomatch = false
@@ -197,12 +195,12 @@ local seek, read, readbytes, readchar, readshort, readint, scan, scanall, file_o
 		return nil
 	end
 
-	function scanall(signature)
+	function scanall(signature, start, limit)
 		local results = {}
-		local last = 0
+		local last = start or 0
 
 		while true do
-			local result = scan(signature, last)
+			local result = scan(signature, last, limit)
 			if not result then break end
 			results[#results + 1] = result
 			last = result + 1
@@ -338,15 +336,62 @@ end
 -- returns a pointer to a function like this: https://i.imgur.com/ilfgGPG.png
 local function askresourcedata()
 	local results = {}
-	local hash = {} -- for checking duplicates 
+	local hash = {} -- for checking duplicates
+	
+	local start, limit, section_name
+	if not checkopt("--scanall") then
+		local _, target = checkopt("--section")
 
-	print("Scanning...")
+		if target then 
+			for i, v in next, pe.Sections do
+				if v.Name == target then
+					local prd = peparser.toDec(v.PointerToRawData)
+					local srd = peparser.toDec(v.SizeOfRawData)
+					
+					start = prd
+					limit = prd + srd
+					section_name = v.Name
+
+					break
+				end
+			end
+
+			if not start then
+				print("WARNING: Unable to find section " .. target)
+			end
+		else
+			for i, v in next, pe.Sections do
+				local flags = peparser.toDec(v.Characteristics)
+				local is_code = math.floor(flags / 2^5) % 2 ~= 0 -- IMAGE_SCN_CNT_CODE (0x00000020)
+				local is_executable = math.floor(flags / 2^29) % 2 ~= 0 -- IMAGE_SCN_MEM_EXECUTE (0x20000000)
+
+				if is_code and is_executable then
+					local prd = peparser.toDec(v.PointerToRawData)
+					local srd = peparser.toDec(v.SizeOfRawData)
+					
+					start = prd
+					limit = prd + srd
+					section_name = v.Name
+					
+					break
+				end
+			end
+		end
+	end
+
+	if start then
+		print(string.format("Scanning section %s (0x%08X-0x%08X)...", section_name, start, limit))
+	else
+		print("Scanning file...")
+	end
+
+	local clock = os.clock()
 
 	local arch = archs[peparser.toDec(pe.Machine)]
 	assert(arch ~= nil, "unknown architecture")
 
 	for i, v in next, arch.signatures do
-		for j, k in next, scanall(v[1]) do
+		for j, k in next, scanall(v[1], start, limit) do
 			-- extract 
 			local offsets = v[2](k)
 			if not hash[offsets[1]] then 
@@ -355,6 +400,8 @@ local function askresourcedata()
 			end
 		end
 	end
+
+	print("Done in " .. (os.clock() - clock) .. "s\n")
 
 	if #results > 0 then
 		local _, choice = checkopt("--chunk", true)
@@ -380,11 +427,6 @@ local function askresourcedata()
 	else 
 		error("unable to find any resource chunks")
 	end
-end
-
--- returns data, name, tree, and version
-local function extractoffsets(loc)
-
 end
 
 local function dumpresourcedata(outputdir, data, names, tree, version)
