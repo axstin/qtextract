@@ -12,9 +12,9 @@ usage: lua qtextract.lua filename [options]
   options:
     --help                   Print this help
     --chunk chunk_id         The chunk to dump. Exclude this to see a list of chunks (if any can be found) and use 1 to dump all chunks
-	--output directory       For specifying an output directory
-	--scanall                Scan the entire file (instead of the first executable section)
-	--section section        For scanning a specific section
+    --output directory       For specifying an output directory
+    --scanall                Scan the entire file (instead of the first executable section)
+    --section section        For scanning a specific section
     --data, --datarva info   [Advanced] Use these options to manually provide offsets to a qt resource in the binary
                              (e.g. if no chunks were found automatically by qtextract).
                              'info' should use the following format: %x,%x,%x,%d
@@ -22,4 +22,5 @@ usage: lua qtextract.lua filename [options]
                              and the last decimal value is the version (usually always 1).
 
                              If '--datarva' is used, provide RVA values (offsets from the image base) instead of file offsets.
-                             See checkdataopt() in qtextract.lua for an example on finding these offsets using IDA.```
+                             See checkdataopt() in qtextract.lua for an example on finding these offsets using IDA.
+```
