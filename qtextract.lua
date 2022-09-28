@@ -430,7 +430,7 @@ local function askresourcedata()
 end
 
 local function dumpresourcedata(outputdir, data, names, tree, version)
-	assert(version == 1 or version == 2, "version " .. tostring(version) .. " not supported")
+	assert(version >= 1 and version <= 3, "version " .. tostring(version) .. " not supported")
 
 	-- https://github.com/qt/qtbase/blob/5.11/src/corelib/io/qresource.cpp#L96
 	local function findoffset(node)
@@ -571,7 +571,7 @@ if not outputdir then
 end
 
 for i, v in next, list do
-	print("\nExtracting chunk #1 (" .. ashex(v.register) .. ")")
+	print("\nExtracting chunk #" .. i + 1 .. " (" .. ashex(v.register) .. ")")
 	dumpresourcedata(outputdir .. (#list > 1 and "/" .. i or ""), unpack(v.offsets))
 end
 
