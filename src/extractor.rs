@@ -10,6 +10,7 @@ pub enum QtNodeAux {
     Resource {
         locale: u32,
         is_compressed: bool,
+        file_offset: usize,
         data: Vec<u8>
     }
 }
@@ -32,15 +33,17 @@ impl QtNode {
 
         // https://github.com/qt/qtbase/blob/5.11/src/corelib/io/qresource.cpp#L538
         let maybe_last_modified = if self.last_modified != 0 {
-            let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(self.last_modified);
-            print!(" (last modified {})", time::OffsetDateTime::from(time));
-            Some(time)
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(self.last_modified))
         } else {
             None
         };
         
         match &self.aux {
             QtNodeAux::Directory(children) => {
+                // don't think this is ever the case but /shrug
+                if let Some(time) = maybe_last_modified {
+                    print!(" (last modified {})", time::OffsetDateTime::from(time));
+                }
                 println!();
 
                 fs::create_dir_all(&node_path)?;
@@ -49,8 +52,11 @@ impl QtNode {
                     child.dump_impl(&node_path, c + 1)?;
                 }
             },
-            QtNodeAux::Resource { is_compressed, data, .. } => {
-                print!(" ({} bytes)", data.len());
+            QtNodeAux::Resource { is_compressed, file_offset, data, .. } => {
+                print!(" @ {:#08X} ({} bytes)", *file_offset, data.len());
+                if let Some(time) = maybe_last_modified {
+                    print!(" (last modified {})", time::OffsetDateTime::from(time));
+                }
                 if *is_compressed {
                     print!(" [compressed]");
                 }
@@ -119,7 +125,7 @@ impl QtResourceInfo {
         Some(Vec::from(data))
     }
 
-    pub fn parse_node(&self, buffer: &[u8], node: i32) -> Option<QtNode> {
+    #[must_use] pub fn parse_node(&self, buffer: &[u8], node: i32) -> Option<QtNode> {
         if node == -1 {
             return None;
         }
@@ -171,7 +177,7 @@ impl QtResourceInfo {
             let locale = stream.read_u32::<true>()?;
             let data_offset = stream.read_i32::<true>()?;
 
-            QtNodeAux::Resource { locale, is_compressed, data: self.read_data(buffer, data_offset)? }
+            QtNodeAux::Resource { locale, is_compressed, file_offset: self.data.wrapping_add_signed(data_offset as isize), data: self.read_data(buffer, data_offset)? }
         };
 
         let last_modified = if self.version >= 2 {

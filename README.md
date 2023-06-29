@@ -1,6 +1,8 @@
 ## About
 QtExtract is a tool for extracting Qt resources from x86/x64 Windows binaries (.exe/.dll)
 
+![Running qtextract on Wireshark](./img/usage.gif)
+
 ## Usage
 
 ```
