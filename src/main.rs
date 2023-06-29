@@ -7,7 +7,7 @@ pub mod binary_stream;
 pub mod extractor;
 pub mod aob;
 
-use goblin::{pe::{PE, section_table::SectionTable}};
+use goblin::pe::{PE, section_table::SectionTable};
 use std::{fs, env, io::Write, collections::HashSet};
 use std::path::PathBuf;
 use regex::{self, Regex};
@@ -292,41 +292,37 @@ fn ask_resource_data(buffer: &[u8], pe: &PE) -> Option<Vec<QtResourceInfo>> {
     }
 
     let start_time = std::time::Instant::now();
-    let results = do_scan(&buffer, start, end, pe);
+    let results = do_scan(buffer, start, end, pe);
     println!("Done in {:.2?}", start_time.elapsed());
 
     if !results.is_empty() {
-        let chunk_id = match check_opt_arg("--chunk") {
-            Some(arg) => {
-                let id: usize = arg.trim().parse().expect("integer value expected for `chunk` parameter");
-                assert!(id <= results.len(), "value provided by `chunk` parameter is out of range");
-                id
-            },
-            None => {
-                println!("Select a resource chunk to dump:");
-                println!("0 - Dump all");
-                
-                for (i, result) in results.iter().enumerate() {
-                    println!("{:#?}", result);
-                    println!("{} - {:#08X} (via signature {}, version {})", i + 1, result.registrar, result.signature_id, result.version);
+        let chunk_id = if let Some(arg) = check_opt_arg("--chunk") {
+            let id: usize = arg.trim().parse().expect("integer value expected for `chunk` parameter");
+            assert!(id <= results.len(), "value provided by `chunk` parameter is out of range");
+            id
+        } else {
+            println!("Select a resource chunk to dump:");
+            println!("0 - Dump all");
+            
+            for (i, result) in results.iter().enumerate() {
+                println!("{} - {:#08X} (via signature {}, version {})", i + 1, result.registrar, result.signature_id, result.version);
+            }
+
+            println!();
+
+            loop {
+                print!(">");
+                std::io::stdout().flush().unwrap();
+
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                let selection = input.trim().parse::<usize>().unwrap_or(usize::MAX);
+
+                if selection <= results.len() {
+                    break selection;
                 }
 
-                println!();
-
-                loop {
-                    print!(">");
-                    std::io::stdout().flush().unwrap();
-
-                    let mut input = String::new();
-                    let _ = std::io::stdin().read_line(&mut input);
-                    let selection = input.trim().parse::<usize>().unwrap_or(usize::MAX);
-
-                    if selection <= results.len() {
-                        break selection;
-                    } else {
-                        println!("Please enter a number between 0 and {}", results.len());
-                    }
-                }
+                println!("Please enter a number between 0 and {}", results.len());
             }
         };
 
@@ -342,12 +338,12 @@ fn ask_resource_data(buffer: &[u8], pe: &PE) -> Option<Vec<QtResourceInfo>> {
 
 fn main() {
     let Some(path) = env::args().nth(1) else {
-        println!("{}", USAGE);
+        println!("{USAGE}");
         return
     };
 
     if check_opt("--help") {
-        println!("{}", USAGE);
+        println!("{USAGE}");
         return
     }
 
@@ -360,15 +356,14 @@ fn main() {
             println!("Extracting chunk #{} ({:#08X})", i + 1, result.registrar);
             println!("---");
 
-            let top_node = result.parse_node(&buffer, 0).expect("failed to parse node");
-            
             let dump_path = if to_dump.len() > 1 {
                 output_directory.join((i + 1).to_string())
             } else {
                 output_directory.clone()
             };
 
-            result.dump_node(&top_node, &dump_path).expect("failed to dump node");
+            result.parse_node(&buffer, 0).expect("failed to parse node")
+                .dump(&dump_path).expect("failed to dump node");
         }
     } else {
         println!("No chunks to dump");

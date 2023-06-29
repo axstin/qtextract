@@ -7,6 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+filetime = "0.2.21"
 goblin = "0.4.2"
 libflate = "1.4.0"
 regex = "1.8.4"

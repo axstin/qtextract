@@ -65,7 +65,7 @@ pub const fn craft_signature<const N: usize>(s: &[u8]) -> Signature<N> {
 macro_rules! define_signature {
     ($s:literal) => {
         {
-            use crate::aob;
+            use $crate::aob;
 
             const SIG_LEN: usize = aob::calc_signature_size($s);
             const SIG: aob::Signature<SIG_LEN> = aob::craft_signature::<SIG_LEN>($s);
