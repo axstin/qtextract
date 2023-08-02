@@ -1,5 +1,5 @@
 name: Build
-run-name: ${{ github.actor }} is building
+run-name: Building project
 
 on: workflow_dispatch
 
@@ -9,7 +9,7 @@ jobs:
     name: Rust project
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
