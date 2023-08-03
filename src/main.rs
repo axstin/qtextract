@@ -128,6 +128,30 @@ fn x86_extract(offset: usize, bytes: &[u8], pe: &PE) -> QtResourceInfo {
     }
 }
 
+fn x64_extract(bytes_offset: usize, bytes: &[u8], pe: &PE) -> QtResourceInfo {
+    assert!(bytes.len() >= 31);
+    let bytes_rva = pe.find_rva(bytes_offset).unwrap();
+    let mut stream = BinaryReader::new_at(bytes, 4);
+
+    stream.skip(3);
+    let data = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
+    stream.skip(1);
+    let version = stream.read_u32::<false>().unwrap() as usize;
+    stream.skip(3);
+    let name = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
+    stream.skip(3);
+    let tree = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
+    
+    QtResourceInfo {
+        signature_id: -1,
+        registrar: bytes_offset,
+        data,
+        name,
+        tree,
+        version
+    }
+}
+
 static TEXT_SIGNATURES: &[SignatureDefinition] = &[
     SignatureDefinition {
         id: 0,
@@ -174,29 +198,13 @@ static TEXT_SIGNATURES: &[SignatureDefinition] = &[
         id: 3,
         x64: true,
         signature: define_signature!(b"48 83 EC 28 4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? E8"),
-        extractor: | bytes_offset, bytes, pe | {
-            assert!(bytes.len() >= 31);
-            let bytes_rva = pe.find_rva(bytes_offset).unwrap();
-            let mut stream = BinaryReader::new_at(bytes, 4);
-
-            stream.skip(3);
-            let data = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
-            stream.skip(1);
-            let version = stream.read_u32::<false>().unwrap() as usize;
-            stream.skip(3);
-            let name = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
-            stream.skip(3);
-            let tree = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
-            
-            QtResourceInfo {
-                signature_id: -1,
-                registrar: bytes_offset,
-                data,
-                name,
-                tree,
-                version
-            }
-        }
+        extractor: x64_extract
+    },
+    SignatureDefinition {
+        id: 4,
+        x64: true,
+        signature: define_signature!(b"48 83 EC 28 4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? FF 15"),
+        extractor: x64_extract
     }
 ];
 
