@@ -214,7 +214,7 @@ fn get_target_section<'a>(pe: &'a PE) -> Option<&'a SectionTable> {
             for v in &pe.sections {
                 if let Ok(name) = v.name() {
                     if name == target {
-                        return Some(&v);
+                        return Some(v);
                     }
                 }
             }
@@ -313,7 +313,7 @@ fn ask_resource_data(buffer: &[u8], pe: &PE) -> Option<Vec<QtResourceInfo>> {
             println!("0 - Dump all");
             
             for (i, result) in results.iter().enumerate() {
-                println!("{} - {:#08X} (via signature {}, version {})", i + 1, result.registrar, result.signature_id, result.version);
+                println!("{} - {:#08X} (via signature {}: version={}, data={:#08X}, name={:#08X}, tree={:#08X})", i + 1, result.registrar, result.signature_id, result.version, result.data, result.name, result.tree);
             }
 
             println!();
@@ -361,8 +361,7 @@ fn main() {
 
     if let Some(to_dump) = check_data_opt(&pe).or_else(|| ask_resource_data(&buffer, &pe)) {
         for (i, result) in to_dump.iter().enumerate() {
-            println!("Extracting chunk #{} ({:#08X})", i + 1, result.registrar);
-            println!("---");
+            print!("Extracting chunk #{} ({:#08X})... ", i + 1, result.registrar);
 
             let dump_path = if to_dump.len() > 1 {
                 output_directory.join((i + 1).to_string())
@@ -370,8 +369,13 @@ fn main() {
                 output_directory.clone()
             };
 
-            result.parse_node(&buffer, 0).expect("failed to parse node")
-                .dump(&dump_path).expect("failed to dump node");
+            if let Some(node) = result.parse_node(&buffer, 0) {
+                println!("OK");
+                println!("---");
+                node.dump(&dump_path).expect("failed to dump node");
+            } else {
+                println!("ERROR (failed to parse node)");
+            }
         }
     } else {
         println!("No chunks to dump");
