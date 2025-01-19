@@ -42,7 +42,7 @@ struct SignatureDefinition {
     id: i32,
     x64: bool,
     signature: &'static [(u8, bool)],
-    extractor: fn(offset: usize, bytes: &[u8], pe: &PE) -> QtResourceInfo
+    extractor: fn(offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo>
 }
 
 impl SignatureDefinition {
@@ -79,12 +79,13 @@ impl SignatureDefinition {
 }
 
 trait GoblinPEExtensions {
-    fn find_offset(&self, rva: usize) -> Option<usize>;
-    fn find_rva(&self, offset: usize) -> Option<usize>;
+    fn rva2fo(&self, rva: usize) -> Option<usize>;
+    fn fo2rva(&self, offset: usize) -> Option<usize>;
+    fn va2fo(&self, offset: usize) -> Option<usize>;
 }
 
 impl GoblinPEExtensions for PE<'_> {
-    fn find_offset(&self, rva: usize) -> Option<usize> {
+    fn rva2fo(&self, rva: usize) -> Option<usize> {
         goblin::pe::utils::find_offset(rva,
             &self.sections,
             self.header.optional_header.unwrap().windows_fields.file_alignment,
@@ -92,7 +93,7 @@ impl GoblinPEExtensions for PE<'_> {
         )
     }
 
-    fn find_rva(&self, offset: usize) -> Option<usize> {
+    fn fo2rva(&self, offset: usize) -> Option<usize> {
         for section in &self.sections {
             let prd = section.pointer_to_raw_data as usize;
             let srd = section.size_of_raw_data as usize;
@@ -104,52 +105,59 @@ impl GoblinPEExtensions for PE<'_> {
         }
         None
     }
+
+    fn va2fo(&self, va: usize) -> Option<usize> {
+        if va >= self.image_base {
+            return self.rva2fo(va - self.image_base)
+        }
+        None
+    }
 }
 
-fn x86_extract(offset: usize, bytes: &[u8], pe: &PE) -> QtResourceInfo {
+fn x86_extract(offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
     let mut offsets = [0usize; 3];
     assert!(bytes.len() >= 17);
 
     let mut stream = BinaryReader::new(bytes);
     for i in 0..3 {
         stream.skip(1); // skip 0x68 (push)
-        offsets[i] = pe.find_offset(stream.read_u32::<false>().unwrap() as usize - pe.image_base).expect("bad rva in extractor");
+        offsets[i] = pe.rva2fo(stream.read_u32::<false>()? as usize - pe.image_base)?;
     }
     stream.skip(1); // skip 0x6A (push)
-    let version = stream.read_byte().unwrap() as usize;
+    let version = stream.read_byte()? as usize;
 
-    QtResourceInfo {
+    Some(QtResourceInfo {
         signature_id: -1,
         registrar: offset,
         data: offsets[0],
         name: offsets[1],
         tree: offsets[2],
         version
-    }
+    })
 }
 
-fn x64_extract(bytes_offset: usize, bytes: &[u8], pe: &PE) -> QtResourceInfo {
+fn x64_extract(bytes_offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
     assert!(bytes.len() >= 31);
-    let bytes_rva = pe.find_rva(bytes_offset).unwrap();
+    let bytes_rva = pe.fo2rva(bytes_offset)?;
     let mut stream = BinaryReader::new_at(bytes, 4);
 
     stream.skip(3);
-    let data = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
+    let data = pe.rva2fo(stream.read_u32::<false>()? as usize + bytes_rva + stream.position())?;
     stream.skip(1);
-    let version = stream.read_u32::<false>().unwrap() as usize;
+    let version = stream.read_u32::<false>()? as usize;
     stream.skip(3);
-    let name = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
+    let name = pe.rva2fo(stream.read_u32::<false>()? as usize + bytes_rva + stream.position())?;
     stream.skip(3);
-    let tree = pe.find_offset(stream.read_u32::<false>().unwrap() as usize + bytes_rva + stream.position()).unwrap();
+    let tree = pe.rva2fo(stream.read_u32::<false>()? as usize + bytes_rva + stream.position())?;
     
-    QtResourceInfo {
+    Some(QtResourceInfo {
         signature_id: -1,
         registrar: bytes_offset,
         data,
         name,
         tree,
         version
-    }
+    })
 }
 
 static TEXT_SIGNATURES: &[SignatureDefinition] = &[
@@ -172,26 +180,26 @@ static TEXT_SIGNATURES: &[SignatureDefinition] = &[
         extractor: | bytes_offset, bytes, pe | {
             let mut result = [0usize; 3];
             assert!(bytes.len() >= 30);
-            let bytes_rva = pe.find_rva(bytes_offset).unwrap();
+            let bytes_rva = pe.fo2rva(bytes_offset)?;
             let mut stream = BinaryReader::new_at(bytes, 4);
 
             for i in 0..3 {
                 stream.skip(3);
-                let v = stream.read_u32::<false>().unwrap() as usize;
-                result[i] = pe.find_offset(bytes_rva + stream.position() + v).expect("bad rva in extractor");
+                let v = stream.read_u32::<false>()? as usize;
+                result[i] = pe.rva2fo(bytes_rva + stream.position() + v)?;
             }
 
             stream.skip(1);
-            let version = stream.read_u32::<false>().unwrap() as usize;
+            let version = stream.read_u32::<false>()? as usize;
 
-            QtResourceInfo {
+            Some(QtResourceInfo {
                 signature_id: -1,
                 registrar: bytes_offset,
                 data: result[0],
                 name: result[1],
                 tree: result[2],
                 version
-            }
+            })
         }
     },
     SignatureDefinition {
@@ -205,6 +213,41 @@ static TEXT_SIGNATURES: &[SignatureDefinition] = &[
         x64: true,
         signature: define_signature!(b"48 83 EC 28 4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? FF 15"),
         extractor: x64_extract
+    },
+    SignatureDefinition {
+        id: 5,
+        x64: false,
+        signature: define_signature!(b"C7 44 24 0C ?? ?? ?? ?? C7 44 24 08 ?? ?? ?? ?? C7 44 24 04 ?? ?? ?? ?? C7 04 24 ?? 00 00 00 FF 15"),
+        extractor: | bytes_offset, bytes, pe | {
+            // See issue #8. MinGW x86
+            // mov    DWORD PTR [esp+0xc],0x7fe180
+            // mov    DWORD PTR [esp+0x8],0x7fda40
+            // mov    DWORD PTR [esp+0x4],0x7fd6c0
+            // mov    DWORD PTR [esp],0x1
+            // call   qRegisterResourceData
+
+            let mut result = [0usize; 3];
+            let mut stream = BinaryReader::new_at(bytes, 0);
+            let bytes_rva = pe.fo2rva(bytes_offset)?;
+
+            for i in 0..3 {
+                stream.skip(4);
+                let v = stream.read_u32::<false>()? as usize;
+                result[i] = pe.va2fo(v)?;
+            }
+
+            stream.skip(3);
+            let version = stream.read_u32::<false>()? as usize;
+
+            Some(QtResourceInfo {
+                signature_id: -1,
+                registrar: bytes_offset,
+                data: result[0],
+                name: result[1],
+                tree: result[2],
+                version
+            })
+        }
     }
 ];
 
@@ -233,11 +276,14 @@ fn do_scan(buffer: &[u8], start: usize, end: usize, pe: &PE) -> Vec<QtResourceIn
     for def in TEXT_SIGNATURES {
         if def.x64 == pe.is_64 {
             for fo in def.scan_all(buffer, start, end) {
-                let mut info = (def.extractor)(fo, &buffer[fo..fo+def.signature.len()], pe);
-                if !seen.contains(&info.data) {
-                    seen.insert(info.data);
-                    info.signature_id = def.id;
-                    results.push(info);
+                if let Some(mut info) = (def.extractor)(fo, &buffer[fo..fo+def.signature.len()], pe) {
+                    if !seen.contains(&info.data) {
+                        seen.insert(info.data);
+                        info.signature_id = def.id;
+                        results.push(info);
+                    }
+                } else {
+                    println!("NOTICE: Failed to extract parameters from signature at {:#08X}. Likely false positive", fo);
                 }
             }
         }
@@ -267,7 +313,7 @@ fn check_data_opt(pe: &PE) -> Option<Vec<QtResourceInfo>> {
 
             if is_rva {
                 for i in 1..=3 {
-                    offsets[i - 1] = pe.find_offset(usize::from_str_radix(&captures[i], 16).unwrap()).expect("invalid rva passed to `datarva`");
+                    offsets[i - 1] = pe.rva2fo(usize::from_str_radix(&captures[i], 16).unwrap()).expect("invalid rva passed to `datarva`");
                 }
             } else {
                 for i in 1..=3 {
