@@ -27,7 +27,8 @@ pub struct QtNode {
 impl QtNode {
     fn dump_impl(&self, path: &Path, c: usize) -> std::io::Result<()> {
         let indent = "  ".repeat(c);
-        let node_path = path.join(self.name.as_str());
+        let sanitized_name = self.name.replace(&['/', '\\'][..], "_");
+        let node_path = path.join(sanitized_name);
 
         print!("{}{}", indent, self.name);
 

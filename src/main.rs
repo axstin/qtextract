@@ -116,7 +116,6 @@ impl GoblinPEExtensions for PE<'_> {
 
 fn x86_extract(offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
     let mut offsets = [0usize; 3];
-    assert!(bytes.len() >= 17);
 
     let mut stream = BinaryReader::new(bytes);
     for i in 0..3 {
@@ -136,10 +135,33 @@ fn x86_extract(offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
     })
 }
 
-fn x64_extract(bytes_offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
-    assert!(bytes.len() >= 31);
+fn x64_extract1(bytes_offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
+    let mut result = [0usize; 3];
     let bytes_rva = pe.fo2rva(bytes_offset)?;
-    let mut stream = BinaryReader::new_at(bytes, 4);
+    let mut stream = BinaryReader::new_at(bytes, 0);
+
+    for i in 0..3 {
+        stream.skip(3);
+        let v = stream.read_u32::<false>()? as usize;
+        result[i] = pe.rva2fo(bytes_rva + stream.position() + v)?;
+    }
+
+    stream.skip(1);
+    let version = stream.read_u32::<false>()? as usize;
+
+    Some(QtResourceInfo {
+        signature_id: -1,
+        registrar: bytes_offset,
+        data: result[0],
+        name: result[1],
+        tree: result[2],
+        version
+    })
+}
+
+fn x64_extract2(bytes_offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
+    let bytes_rva = pe.fo2rva(bytes_offset)?;
+    let mut stream = BinaryReader::new_at(bytes, 0);
 
     stream.skip(3);
     let data = pe.rva2fo(stream.read_u32::<false>()? as usize + bytes_rva + stream.position())?;
@@ -160,94 +182,150 @@ fn x64_extract(bytes_offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceI
     })
 }
 
+fn x86_extract_mingw(bytes_offset: usize, bytes: &[u8], pe: &PE) -> Option<QtResourceInfo> {
+    let mut result = [0usize; 3];
+    let mut stream = BinaryReader::new_at(bytes, 0);
+
+    for i in 0..3 {
+        stream.skip(4);
+        let v = stream.read_u32::<false>()? as usize;
+        result[i] = pe.va2fo(v)?;
+    }
+
+    stream.skip(3);
+    let version = stream.read_u32::<false>()? as usize;
+
+    Some(QtResourceInfo {
+        signature_id: -1,
+        registrar: bytes_offset,
+        data: result[0],
+        name: result[1],
+        tree: result[2],
+        version
+    })
+}
+
 static TEXT_SIGNATURES: &[SignatureDefinition] = &[
     SignatureDefinition {
+        /*
+        msvc, 32-bit, absolute offsets
+
+        68 00 00 00 00          push   0x0
+        68 00 00 00 00          push   0x0
+        68 00 00 00 00          push   0x0
+        6a 00                   push   0x0
+        e8 00 00 00 00          call   0x16
+         */
+
         id: 0,
         x64: false,
-        signature: define_signature!(b"68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? E8 ?? ?? ?? ?? 83 C4 10 B8 01 00 00 00 C3"),
+        signature: define_signature!(b"68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? E8 ?? ?? ?? ??"),
         extractor: x86_extract
     },
     SignatureDefinition {
+        /*
+        msvc, 32-bit, absolute offsets
+
+        68 00 00 00 00          push   0x0
+        68 00 00 00 00          push   0x0
+        68 00 00 00 00          push   0x0
+        6a 00                   push   0x0
+        ff 15 00 00 00 00       call   DWORD PTR ds:0x0
+         */
         id: 1,
         x64: false,
-        signature: define_signature!(b"68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? FF 15 ?? ?? ?? ?? 83 C4 10 B8 01 00 00 00 C3"),
+        signature: define_signature!(b"68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 6A ?? FF 15"),
         extractor: x86_extract
     },
     SignatureDefinition {
+        /*
+        msvc, 64-bit, relative offsets
+
+        4c 8d 0d 00 00 00 00    lea    r9,[rip+0x0]
+        4c 8d 05 00 00 00 00    lea    r8,[rip+0x0]
+        48 8d 15 00 00 00 00    lea    rdx,[rip+0x0]
+        b9 00 00 00 00          mov    ecx,0x0
+        e8 00 00 00 00          call   0x0
+         */
         id: 2,
         x64: true,
-        signature: define_signature!(b"48 83 EC 28 4C 8D 0D ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? B9 ?? ?? ?? ?? E8 ?? ?? ?? ?? B8 01 00 00 00 48 83 C4 28 C3"),
-        extractor: | bytes_offset, bytes, pe | {
-            let mut result = [0usize; 3];
-            assert!(bytes.len() >= 30);
-            let bytes_rva = pe.fo2rva(bytes_offset)?;
-            let mut stream = BinaryReader::new_at(bytes, 4);
-
-            for i in 0..3 {
-                stream.skip(3);
-                let v = stream.read_u32::<false>()? as usize;
-                result[i] = pe.rva2fo(bytes_rva + stream.position() + v)?;
-            }
-
-            stream.skip(1);
-            let version = stream.read_u32::<false>()? as usize;
-
-            Some(QtResourceInfo {
-                signature_id: -1,
-                registrar: bytes_offset,
-                data: result[0],
-                name: result[1],
-                tree: result[2],
-                version
-            })
-        }
+        signature: define_signature!(b"4C 8D 0D ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? B9 ?? 00 00 00 E8"),
+        extractor: x64_extract1
     },
     SignatureDefinition {
+        /*
+        msvc, 64-bit, relative offsets
+
+        4c 8d 0d 00 00 00 00    lea    r9,[rip+0x0]
+        4c 8d 05 00 00 00 00    lea    r8,[rip+0x0]
+        48 8d 15 00 00 00 00    lea    rdx,[rip+0x0]
+        b9 00 00 00 00          mov    ecx,0x0
+        ff 15 ef d7 02 00       call   QWORD PTR [rip+0x0]
+         */
         id: 3,
         x64: true,
-        signature: define_signature!(b"48 83 EC 28 4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? E8"),
-        extractor: x64_extract
+        signature: define_signature!(b"4C 8D 0D ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? B9 ?? 00 00 00 FF 15"),
+        extractor: x64_extract1
     },
     SignatureDefinition {
+        /*
+        msvc, 64-bit, relative offsets
+
+        4c 8d 0d 00 00 00 00    lea    r9,[rip+0x0]
+        b9 00 00 00 00          mov    ecx,0x0
+        4c 8d 05 00 00 00 00    lea    r8,[rip+0x0]
+        48 8d 15 00 00 00 00    lea    rdx,[rip+0x0]
+        e8 00 00 00 00          call   0x23
+         */
         id: 4,
         x64: true,
-        signature: define_signature!(b"48 83 EC 28 4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? FF 15"),
-        extractor: x64_extract
+        signature: define_signature!(b"4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? E8"),
+        extractor: x64_extract2
     },
     SignatureDefinition {
+        /*
+        msvc, 64-bit, relative offsets
+
+        4c 8d 0d 00 00 00 00    lea    r9,[rip+0x0]
+        b9 00 00 00 00          mov    ecx,0x0
+        4c 8d 05 00 00 00 00    lea    r8,[rip+0x0]
+        48 8d 15 00 00 00 00    lea    rdx,[rip+0x0]
+        ff 15 00 00 00 00       call   QWORD PTR [rip+0x0]
+         */
         id: 5,
+        x64: true,
+        signature: define_signature!(b"4C 8D 0D ?? ?? ?? ?? B9 ?? ?? ?? ?? 4C 8D 05 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? FF 15"),
+        extractor: x64_extract2
+    },
+    SignatureDefinition {
+        /*
+        mingw, 32-bit, absolute offsets (see issue #8)
+
+        c7 44 24 0c 00 00 00 00 mov    DWORD PTR [esp+0xc],0x0
+        c7 44 24 08 00 00 00 00 mov    DWORD PTR [esp+0x8],0x0
+        c7 44 24 04 00 00 00 00 mov    DWORD PTR [esp+0x4],0x0
+        c7 04 24 00 00 00 00    mov    DWORD PTR [esp],0x0
+        ff 15 00 00 00 00       call   DWORD PTR ds:0x0
+         */
+        id: 6,
         x64: false,
         signature: define_signature!(b"C7 44 24 0C ?? ?? ?? ?? C7 44 24 08 ?? ?? ?? ?? C7 44 24 04 ?? ?? ?? ?? C7 04 24 ?? 00 00 00 FF 15"),
-        extractor: | bytes_offset, bytes, pe | {
-            // See issue #8. MinGW x86
-            // mov    DWORD PTR [esp+0xc],0x7fe180
-            // mov    DWORD PTR [esp+0x8],0x7fda40
-            // mov    DWORD PTR [esp+0x4],0x7fd6c0
-            // mov    DWORD PTR [esp],0x1
-            // call   qRegisterResourceData
+        extractor: x86_extract_mingw
+    },
+    SignatureDefinition {
+        /*
+        mingw, 32-bit, absolute offsets
 
-            let mut result = [0usize; 3];
-            let mut stream = BinaryReader::new_at(bytes, 0);
-            let bytes_rva = pe.fo2rva(bytes_offset)?;
-
-            for i in 0..3 {
-                stream.skip(4);
-                let v = stream.read_u32::<false>()? as usize;
-                result[i] = pe.va2fo(v)?;
-            }
-
-            stream.skip(3);
-            let version = stream.read_u32::<false>()? as usize;
-
-            Some(QtResourceInfo {
-                signature_id: -1,
-                registrar: bytes_offset,
-                data: result[0],
-                name: result[1],
-                tree: result[2],
-                version
-            })
-        }
+        c7 44 24 0c 00 00 00 00 mov    DWORD PTR [esp+0xc],0x0
+        c7 44 24 08 00 00 00 00 mov    DWORD PTR [esp+0x8],0x0
+        c7 44 24 04 00 00 00 00 mov    DWORD PTR [esp+0x4],0x0
+        c7 04 24 00 00 00 00    mov    DWORD PTR [esp],0x0
+        e8 00 00 00 00          call   0x0
+         */
+        id: 7,
+        x64: false,
+        signature: define_signature!(b"C7 44 24 0C ?? ?? ?? ?? C7 44 24 08 ?? ?? ?? ?? C7 44 24 04 ?? ?? ?? ?? C7 04 24 ?? 00 00 00 E8"),
+        extractor: x86_extract_mingw
     }
 ];
 
@@ -277,14 +355,18 @@ fn do_scan(buffer: &[u8], start: usize, end: usize, pe: &PE) -> Vec<QtResourceIn
         if def.x64 == pe.is_64 {
             for fo in def.scan_all(buffer, start, end) {
                 if let Some(mut info) = (def.extractor)(fo, &buffer[fo..fo+def.signature.len()], pe) {
-                    if !seen.contains(&info.data) {
-                        seen.insert(info.data);
-                        info.signature_id = def.id;
-                        results.push(info);
+                    if info.version < 10 { // simple sanity check
+                        if !seen.contains(&info.data) {
+                            seen.insert(info.data);
+                            info.signature_id = def.id;
+                            results.push(info);
+                        }
+                        continue;
                     }
-                } else {
-                    println!("NOTICE: Failed to extract parameters from signature at {:#08X}. Likely false positive", fo);
                 }
+
+                #[cfg(debug_assertions)]
+                println!("DEBUG: Failed to extract parameters from signature at {:#08X}. Likely false positive", fo);
             }
         }
     }
