@@ -1,0 +1,46 @@
+name: Build qtextract.exe
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Build in release mode
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qtextract
+          path: target/release/qtextract.exe
+          
+      - name: Generate release parameters
+        shell: bash
+        run: |
+          export LC_ALL=en_US.utf8
+          GIT_COMMIT_ID=$(echo "${{ github.sha }}" |  cut -c 1-7)
+          UPDATE_TIME=$(echo ${{ github.event.repository.updated_at }} | sed 's/[:-]//g')
+          echo "tag_name=v${UPDATE_TIME}" >> $GITHUB_ENV
+          echo "release_name=${UPDATE_TIME} (${GIT_COMMIT_ID})" >> $GITHUB_ENV
+
+      - name: Release with notes
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.release_name }}
+          tag_name: ${{ env.tag_name }}
+          generate_release_notes: true
+          overwrite_files: false
+          files: target/release/qtextract.exe
