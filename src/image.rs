@@ -47,7 +47,8 @@ pub struct Image<'a> {
     pub binary: ImageBinary<'a>,
     pub flags: u32,
     pub base: u64,
-    pub sections: Vec<ImageSection>
+    pub sections: Vec<ImageSection>,
+    pub buffer: &'a [u8]
 }
 
 impl fmt::Debug for Image<'_> {
@@ -63,7 +64,7 @@ impl fmt::Debug for Image<'_> {
 
 impl Image<'_> {
     #[must_use]
-    pub fn from(buffer: &[u8], mach_hint: Option<mach::cputype::CpuType>) -> Option<Image> {
+    pub fn from(buffer: &'_ [u8], mach_hint: Option<mach::cputype::CpuType>) -> Option<Image<'_>> {
         let mut macho_base: u32 = 0;
 
         let binary = match goblin::Object::parse(buffer).ok()? {
@@ -186,7 +187,8 @@ impl Image<'_> {
             binary,
             flags,
             base,
-            sections
+            sections,
+            buffer
         })
     }
 
@@ -218,5 +220,31 @@ impl Image<'_> {
 
     pub const fn is_x64(&self) -> bool {
         self.flags & IM_FLAGS_64BIT != 0
+    }
+
+    pub fn read_at_u8(&self, offset: u64) -> Option<u8> {
+        let len = self.buffer.len();
+        if offset >= len as u64  {
+            return None
+        }
+
+        return Some(self.buffer[offset as usize])
+    }
+
+    pub fn read_at_u32(&self, offset: u64) -> Option<u32> {
+        let offset_us = offset as usize;
+        let size = size_of::<u32>() as usize;
+        let len = self.buffer.len();
+        if offset_us + size >= len.into()  {
+            return None
+        }
+
+        let mut arr = [0u8; 4];
+        arr[0] = self.buffer[offset_us + 0];
+        arr[1] = self.buffer[offset_us + 1];
+        arr[2] = self.buffer[offset_us + 2];
+        arr[3] = self.buffer[offset_us + 3];
+
+        return Some(u32::from_le_bytes(arr));
     }
 }
