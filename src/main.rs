@@ -349,6 +349,101 @@ fn arm64_extract_unique(bytes_offset: usize, bytes: &[u8], image: &Image) -> Opt
     })
 }
 
+fn armv7_decode_ldr(image: &Image, insn: u32, pc_offset: u64, file_offset: u64) -> u64 {
+    let pc = file_offset + 8; // pc on arm is 2 instructions ahead of the current one for some reason
+    let imm = (insn >> 24) & 0xff | (insn >> 8) & 0xf00;
+    let imm64: u64 = imm.into();
+    let ptr = pc + imm64;
+    let val: u64 = image.read_at_u32(ptr).unwrap().into();
+    let res = val + pc + pc_offset;
+
+    //println!("file_offset: {:#x}", file_offset);
+    //println!("pc: {:#x}", pc);
+    //println!("imm: {:#x}", imm);
+    //println!("ptr: {:#x}", ptr);
+    //println!("val: {:#x}", val);
+    //println!("res: {:#x}", res);
+
+    return res;
+}
+
+fn armv7_decode_mov(insn: u32) -> u64 {
+    (insn >> 24).into()
+}
+
+fn armv7_extract(bytes_offset: usize, bytes: &[u8], image: &Image) -> Option<QtResourceInfo> {
+    /*
+    unknown compiler, 32-bit ARMv7
+    sample: EngineDJ on Denon SC6000M
+
+    ??3?9fe5   ldr     r3, [pc, #???] (data)
+    ??2?9fe5   ldr     r2, [pc, #???] (names)
+    ??1?9fe5   ldr     r1, [pc, #???] (tree)
+    0300a0e3   mov     r0, #??? (version)
+    ????????   ???     (unrelated)
+    03308fe0   add     r3, pc, r3 (data)
+    02208fe0   add     r2, pc, r2 (names)
+    01108fe0   add     r1, pc, r1 (tree)
+    ????????   ???     (unrelated)
+    ????????   ???     (unrelated)
+    ??????eb   bl      qRegisterResourceData
+    */
+
+    let mut bytes_va = image.fo2va(bytes_offset as u64)?;
+
+    let mut stream = BinaryReader::new_at(bytes, 0);
+    let mut insns = [0u32; 4];
+
+    let no_insns = bytes.len() / 4;
+
+    let mut offset = 16;
+
+    if no_insns == 9 {
+      stream.read_u32::<true>()?;
+
+      for i in 0..4 {        
+        insns[i] = stream.read_u32::<true>()?;
+      }
+
+      bytes_va += 4;
+    }
+    else if no_insns == 11 {
+      for i in 0..4 {
+        insns[i] = stream.read_u32::<true>()?;
+      }
+
+      offset += 4;
+    }
+    else {
+        println!("{:}", no_insns);
+        return None;
+    }
+
+    //println!("{:#x}", bytes_offset);
+    //println!("{:#x}", bytes_va);
+
+    //println!("{:8x}", insns[0]);
+    //println!("{:8x}", insns[1]);
+    //println!("{:8x}", insns[2]);
+    //println!("{:8x}", insns[3]);
+
+    let data = image.va2fo(armv7_decode_ldr(image, insns[0], offset, bytes_va))?;
+    let name = image.va2fo(armv7_decode_ldr(image, insns[1], offset, bytes_va + 4))?;
+    let tree = image.va2fo(armv7_decode_ldr(image, insns[2], offset, bytes_va + 8))?;
+    let version = armv7_decode_mov(insns[3]) as usize;
+
+    println!("qRegisterResourceData({:x}, {:#x}, {:#x}, {:#x})", version, tree, name, data);
+
+    Some(QtResourceInfo {
+        signature_tag: None,
+        registrar: bytes_offset as u64,
+        data,
+        name,
+        tree,
+        version
+    })
+}
+
 static TEXT_SIGNATURES: &[SignatureDefinition] = &[
     SignatureDefinition {
         /*
@@ -588,6 +683,54 @@ static TEXT_SIGNATURES: &[SignatureDefinition] = &[
         require_flags: IM_ARCH_ARM64,
         signature: define_signature!(b"?? ?? ?? ?? 63 ?? ?? 91 ?? ?? ?? ?? ?? ?? ?? F9 42 ?? ?? 91 ?? ?? ?? ?? ?? ?? ?? 52 21 ?? ?? 91 ?? ?? ?? ??"),
         extractor: arm64_extract_unique
+    },
+
+    SignatureDefinition {
+        /*
+        unknown compiler, 32-bit ARMv7
+        sample: EngineDJ on Denon SC6000M
+
+        ??3?9fe5   ldr     r3, [pc, #???] (data)
+        ??2?9fe5   ldr     r2, [pc, #???] (names)
+        ??1?9fe5   ldr     r1, [pc, #???] (tree)
+        0300a0e3   mov     r0, #??? (version)
+        ????????   ???     (unrelated)
+        03308fe0   add     r3, pc, r3 (data)
+        02208fe0   add     r2, pc, r2 (names)
+        01108fe0   add     r1, pc, r1 (tree)
+        ????????   ???     (unrelated)
+        ????????   ???     (unrelated)
+        ??????eb   bl      qRegisterResourceData
+        */
+
+        tag: "armv7_0",
+        match_flags: IM_TYPE_ELF,
+        require_flags: IM_ARCH_ARM,
+        signature: define_signature!(b"?? 3? 9f e5 ?? 2? 9f e5 ?? 1? 9f e5 03 00 a0 e3 ?? ?? ?? ?? 03 30 8f e0 02 20 8f e0 01 10 8f e0 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? eb"),
+        extractor: armv7_extract
+    },
+
+    SignatureDefinition {
+        /*
+        unknown compiler, 32-bit ARMv7
+        sample: EngineDJ on Denon SC6000M
+
+        ??????eb   (unrelated)
+        ??3?9fe5   ldr     r3, [pc, #???] (data)
+        ??2?9fe5   ldr     r2, [pc, #???] (names)
+        ??1?9fe5   ldr     r1, [pc, #???] (tree)
+        0300a0e3   mov     r0, #??? (version)
+        03308fe0   add     r3, pc, r3 (data)
+        02208fe0   add     r2, pc, r2 (names)
+        01108fe0   add     r1, pc, r1 (tree)
+        ??????eb   bl      qRegisterResourceData
+        */
+
+        tag: "armv7_1",
+        match_flags: IM_TYPE_ELF,
+        require_flags: IM_ARCH_ARM,
+        signature: define_signature!(b"?? ?? ?? eb ?? 3? 9f e5 ?? 2? 9f e5 ?? 1? 9f e5 03 00 a0 e3 03 30 8f e0 02 20 8f e0 01 10 8f e0 ?? ?? ?? eb"),
+        extractor: armv7_extract
     }
 ];
 
